@@ -29,7 +29,7 @@ jobs:
 
     - name: Run tests
       env:
-        TEST_URL: 'https://myhealthapp-test.netlify.app/' # URL als Umgebungsvariable
+        TEST_URL: 'https://myhealthapp-monitoring.netlify.app/' # URL als Umgebungsvariable
       run: npm test
 
  
@@ -62,5 +62,5 @@ jobs:
       - name: ZAP Scan
         uses: zaproxy/action-baseline@v0.13.0
         with:
-          target: 'https://myhealthapp-test.netlify.app/'
+          target: 'https://myhealthapp-monitoring.netlify.app/'
 
