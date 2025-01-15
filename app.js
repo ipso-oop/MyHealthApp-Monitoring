@@ -85,6 +85,7 @@ app.get('/dashboard', async (req, res) => {
 app.post('/health_data/add', async (req, res) => {
   const userId = req.cookies.user;
   const { data, category } = req.body;
+  console.log(req.body);
   await connectToDB();
   await db.collection('health_data').insertOne({ userId, data, category });
   res.send('Daten hinzugefügt');
@@ -92,23 +93,28 @@ app.post('/health_data/add', async (req, res) => {
 
 // Bearbeiten von Gesundheitsdaten
 app.post('/health_data/edit', async (req, res) => {
-  const { id, data, category } = req.body;
+  const userId = req.cookies.user;
+  const { _id, data, category } = req.body;
+  console.log(req.body);
   await connectToDB();
-  await db.collection('health_data').updateOne({ _id: new ObjectId(id) }, { $set: { data, category } });
-  res.send('Daten aktualisiert');
+  await db.collection('health_data').updateOne({ _id: new ObjectId(_id) }, { $set: { data, category } });
+  const healthData = await db.collection('health_data').find({ userId }).toArray();
+  res.render('dashboard', { healthData });
 });
 
 // Löschen von Gesundheitsdaten
 app.post('/health_data/delete', async (req, res) => {
-  const { id } = req.body;
+  const { _id } = req.body;
+  console.log(req.body);
   await connectToDB();
-  await db.collection('health_data').deleteOne({ _id: new ObjectId(id) });
+  await db.collection('health_data').deleteOne({ _id: new ObjectId(_id) });
   res.send('Daten gelöscht');
 });
 
 // Freigabe von Gesundheitsdaten
 app.post('/health_data/share', async (req, res) => {
   const { healthDataId } = req.body;
+  console.log(req.body);
   const accessCode = Math.random().toString(36).substr(2, 8);
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 Stunde gültig
   await connectToDB();
@@ -119,10 +125,11 @@ app.post('/health_data/share', async (req, res) => {
 // Zugriff auf freigegebene Gesundheitsdaten
 app.get('/health_data/access', async (req, res) => {
   const { code } = req.query;
+  console.log(req.query);
   await connectToDB();
   const link = await db.collection('access_links').findOne({ accessCode: code, expiresAt: { $gt: new Date() } });
   if (!link) return res.send('Ungültiger oder abgelaufener Zugangscode');
-
+  console.log(link);
   const healthData = await db.collection('health_data').findOne({ _id: new ObjectId(link.healthDataId) });
   if (healthData) {
     res.json(healthData);
