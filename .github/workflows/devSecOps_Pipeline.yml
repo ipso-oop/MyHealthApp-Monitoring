@@ -62,5 +62,5 @@ jobs:
       - name: ZAP Scan
         uses: zaproxy/action-baseline@v0.13.0
         with:
-          target: 'https:/myhealthapp-monitoring.netlify.app/'
+          target: 'https://myhealthapp-monitoring.netlify.app/'
 
