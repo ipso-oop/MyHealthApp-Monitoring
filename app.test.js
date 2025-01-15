@@ -1,7 +1,7 @@
 const request = require('supertest');
 const express = require('express');
 
-const url = process.env.TEST_URL || 'http://localhost:3000';
+const url = process.env.TEST_URL || 'http://localhost:8888';
 
 let zugangscode;
 
@@ -13,7 +13,8 @@ describe('Test Suite für die Anwendung', () => {
     expect(res.statusCode).toBe(200);
     expect(res.text).toContain('Willkommen bei MyHealthApp');
 	});
-  // Test für die Registrierung
+	
+ // Test für die Registrierung
   test('POST /register sollte einen neuen Benutzer registrieren', async () => {
     const newUser = { username: 'testuser', password: 'testpass', email: 'test@example.com' };
     const res = await request(url).post('/register').send(newUser);
@@ -70,7 +71,7 @@ describe('Test Suite für die Anwendung', () => {
     await agent.post('/login').send({ username: 'admin', password: 'admin123' });
 
     // Teile Daten
-    const res = await agent.post('/health_data/share').send({ healthDataId: 1 });
+    const res = await agent.post('/health_data/share').send({ healthDataId: '6786b25645744e7383201a14' });
     expect(res.statusCode).toBe(200);
     expect(res.text).toContain('Zugangscode');
 	zugangscode = res.text.match(/Zugangscode:\s(\w+)/)[1]; // Zugangscode extrahieren
