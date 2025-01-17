@@ -4,6 +4,8 @@ const cookieParser = require('cookie-parser');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
 const { MongoClient, ObjectId } = require('mongodb');
+const promclient = require('prom-client');
+const basicAuth=require('express-basic-auth');
 const app = express();
 
 // Middleware Setup
@@ -14,7 +16,7 @@ app.set('view engine', 'ejs');
 
 // MongoDB Setup
 const mongoURI =  process.env.MONGODB_URI;
-const client = new MongoClient(mongoURI);
+const mongoclient = new MongoClient(mongoURI);
 let db;
 
 // Mailer Setup (Dummy-Konfiguration für Demo)
@@ -26,12 +28,68 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+// Prometheus-Metriken initialisieren
+const httpRequestCounter = new promclient.Counter({
+  name: 'http_requests_total', // Name der Metrik
+  help: 'Anzahl der HTTP-Anfragen', // Beschreibung
+  labelNames: ['method', 'status'], // Labels für die Metrik
+});
+
+const httpRequestDuration = new promclient.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Dauer der HTTP-Anfragen in Sekunden',
+  labelNames: ['method', 'status'],
+});
+
+// Fehlgeschlagene Logins (Counter)
+const failedLoginCounter = new promclient.Counter({
+  name: 'failed_login_attempts_total',
+  help: 'Anzahl fehlgeschlagener Logins',
+});
+
+// HTTP-Fehler (Counter)
+const httpErrorCounter = new promclient.Counter({
+  name: 'http_errors_total',
+  help: 'Anzahl der HTTP-Fehlerantworten',
+  labelNames: ['status'],
+});
+
 // Verbindung zu MongoDB herstellen
 async function connectToDB() {
-  await client.connect();
-  db = client.db(process.env.MONGODB_DB_NAME || 'health_app_db');
+  await mongoclient.connect();
+  db = mongoclient.db(process.env.MONGODB_DB_NAME || 'health_app_db');
   console.log('Mit MongoDB verbunden');
 }
+
+// Standard-Prometheus-Metriken aktivieren
+promclient.collectDefaultMetrics();
+
+// Middleware zur Erfassung von HTTP-Anfragen
+app.use((req, res, next) => {
+  const end = httpRequestDuration.startTimer(); // Timer starten
+
+  res.on('finish', () => {
+    // Labels setzen und Metriken aktualisieren
+    httpRequestCounter.inc({ method: req.method, status: res.statusCode });
+    end({ method: req.method, status: res.statusCode });
+	
+	 if (res.statusCode >= 400) {
+      httpErrorCounter.inc({ status: res.statusCode });
+    }
+  });
+
+  next();
+});
+
+app.use('/metrics', basicAuth({
+    users: { 'admin': 'admin123' }
+}));
+
+// Prometheus-Metriken-Endpunkt
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', promclient.register.contentType);
+  res.send(await promclient.register.metrics());
+});
 
 // Startseite
 app.get('/', (req, res) => {
@@ -68,6 +126,7 @@ app.post('/login', async (req, res) => {
     res.cookie('user', user._id.toString());
     res.redirect('/dashboard');
   } else {
+	failedLoginCounter.inc();
     res.send('Login fehlgeschlagen');
   }
 });
@@ -152,6 +211,8 @@ async function sendAccessNotification(userId) {
     });
   }
 }
+
+
 
 // Server starten
 /*app.listen(3000, async () => {
