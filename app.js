@@ -54,11 +54,60 @@ const httpErrorCounter = new promclient.Counter({
   labelNames: ['status'],
 });
 
+// Datenbank-Performance-Metriken
+const databaseQueryDuration = new promclient.Gauge({
+  name: 'database_query_duration_seconds',
+  help: 'Dauer der Datenbankabfragen in Sekunden',
+  labelNames: ['operation', 'collection'],
+});
+
+const databaseErrorsCounter = new promclient.Counter({
+  name: 'database_errors_total',
+  help: 'Anzahl der Datenbankfehler',
+  labelNames: ['operation', 'collection', 'error_type'],
+});
+
+const databaseQueriesCounter = new promclient.Counter({
+  name: 'database_queries_total',
+  help: 'Anzahl der Datenbankabfragen',
+  labelNames: ['operation', 'collection'],
+});
+
+// Erweiterte Sicherheitsmetriken
+const successfulLoginCounter = new promclient.Counter({
+  name: 'successful_logins_total',
+  help: 'Anzahl erfolgreicher Logins',
+});
+
 // Verbindung zu MongoDB herstellen
 async function connectToDB() {
   await mongoclient.connect();
   db = mongoclient.db(process.env.MONGODB_DB_NAME || 'health_app_db');
   console.log('Mit MongoDB verbunden');
+}
+
+// Wrapper-Funktion für Datenbankoperationen mit Metriken
+async function executeDatabaseOperation(operation, collectionName, operationFn) {
+  const startTime = process.hrtime.bigint(); // Timer starten
+  databaseQueriesCounter.inc({ operation, collection: collectionName });
+  
+  try {
+    const result = await operationFn();
+    // Zeit in Sekunden berechnen
+    const duration = Number(process.hrtime.bigint() - startTime) / 1e9;
+    databaseQueryDuration.set({ operation, collection: collectionName }, duration);
+    return result;
+  } catch (error) {
+    // Zeit in Sekunden berechnen
+    const duration = Number(process.hrtime.bigint() - startTime) / 1e9;
+    databaseQueryDuration.set({ operation, collection: collectionName }, duration);
+    databaseErrorsCounter.inc({ 
+      operation, 
+      collection: collectionName, 
+      error_type: error.constructor.name 
+    });
+    throw error;
+  }
 }
 
 // Standard-Prometheus-Metriken aktivieren
@@ -106,7 +155,9 @@ app.post('/register', async (req, res) => {
   const hashedPassword = await bcrypt.hash(password, 10);
   try {
 	await connectToDB();
-    await db.collection('users').insertOne({ username, password: hashedPassword, email });
+    await executeDatabaseOperation('insertOne', 'users', () => 
+      db.collection('users').insertOne({ username, password: hashedPassword, email })
+    );
     res.redirect('/login');
   } catch (error) {
     res.status(500).send('Fehler bei der Registrierung');
@@ -121,8 +172,11 @@ app.get('/login', (req, res) => {
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   await connectToDB();
-  const user = await db.collection('users').findOne({ username });
+  const user = await executeDatabaseOperation('findOne', 'users', () => 
+    db.collection('users').findOne({ username })
+  );
   if (user && bcrypt.compareSync(password, user.password)) {
+    successfulLoginCounter.inc();
     res.cookie('user', user._id.toString());
     res.redirect('/dashboard');
   } else {
@@ -134,50 +188,78 @@ app.post('/login', async (req, res) => {
 // Dashboard
 app.get('/dashboard', async (req, res) => {
   const userId = req.cookies.user;
-  if (!userId) return res.redirect('/login');
+  if (!userId) {
+    return res.redirect('/login');
+  }
   await connectToDB();
-  const healthData = await db.collection('health_data').find({ userId }).toArray();
+  const healthData = await executeDatabaseOperation('find', 'health_data', () => 
+    db.collection('health_data').find({ userId }).toArray()
+  );
   res.render('dashboard', { healthData });
 });
 
 // Hinzufügen von Gesundheitsdaten
 app.post('/health_data/add', async (req, res) => {
   const userId = req.cookies.user;
+  if (!userId) {
+    return res.status(401).send('Nicht autorisiert');
+  }
   const { data, category } = req.body;
   console.log(req.body);
   await connectToDB();
-  await db.collection('health_data').insertOne({ userId, data, category });
+  await executeDatabaseOperation('insertOne', 'health_data', () => 
+    db.collection('health_data').insertOne({ userId, data, category })
+  );
   res.send('Daten hinzugefügt');
 });
 
 // Bearbeiten von Gesundheitsdaten
 app.post('/health_data/edit', async (req, res) => {
   const userId = req.cookies.user;
+  if (!userId) {
+    return res.status(401).send('Nicht autorisiert');
+  }
   const { _id, data, category } = req.body;
   console.log(req.body);
   await connectToDB();
-  await db.collection('health_data').updateOne({ _id: new ObjectId(_id) }, { $set: { data, category } });
-  const healthData = await db.collection('health_data').find({ userId }).toArray();
+  await executeDatabaseOperation('updateOne', 'health_data', () => 
+    db.collection('health_data').updateOne({ _id: new ObjectId(_id) }, { $set: { data, category } })
+  );
+  const healthData = await executeDatabaseOperation('find', 'health_data', () => 
+    db.collection('health_data').find({ userId }).toArray()
+  );
   res.render('dashboard', { healthData });
 });
 
 // Löschen von Gesundheitsdaten
 app.post('/health_data/delete', async (req, res) => {
+  const userId = req.cookies.user;
+  if (!userId) {
+    return res.status(401).send('Nicht autorisiert');
+  }
   const { _id } = req.body;
   console.log(req.body);
   await connectToDB();
-  await db.collection('health_data').deleteOne({ _id: new ObjectId(_id) });
+  await executeDatabaseOperation('deleteOne', 'health_data', () => 
+    db.collection('health_data').deleteOne({ _id: new ObjectId(_id) })
+  );
   res.send('Daten gelöscht');
 });
 
 // Freigabe von Gesundheitsdaten
 app.post('/health_data/share', async (req, res) => {
+  const userId = req.cookies.user;
+  if (!userId) {
+    return res.status(401).send('Nicht autorisiert');
+  }
   const { healthDataId } = req.body;
   console.log(req.body);
   const accessCode = Math.random().toString(36).substr(2, 8);
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 Stunde gültig
   await connectToDB();
-  await db.collection('access_links').insertOne({ healthDataId, accessCode, expiresAt });
+  await executeDatabaseOperation('insertOne', 'access_links', () => 
+    db.collection('access_links').insertOne({ healthDataId, accessCode, expiresAt })
+  );
   res.send(`Freigabelink erstellt. Zugangscode: ${accessCode}`);
 });
 
@@ -186,10 +268,16 @@ app.get('/health_data/access', async (req, res) => {
   const { code } = req.query;
   console.log(req.query);
   await connectToDB();
-  const link = await db.collection('access_links').findOne({ accessCode: code, expiresAt: { $gt: new Date() } });
-  if (!link) return res.send('Ungültiger oder abgelaufener Zugangscode');
+  const link = await executeDatabaseOperation('findOne', 'access_links', () => 
+    db.collection('access_links').findOne({ accessCode: code, expiresAt: { $gt: new Date() } })
+  );
+  if (!link) {
+    return res.send('Ungültiger oder abgelaufener Zugangscode');
+  }
   console.log(link);
-  const healthData = await db.collection('health_data').findOne({ _id: new ObjectId(link.healthDataId) });
+  const healthData = await executeDatabaseOperation('findOne', 'health_data', () => 
+    db.collection('health_data').findOne({ _id: new ObjectId(link.healthDataId) })
+  );
   if (healthData) {
     res.json(healthData);
     sendAccessNotification(healthData.userId); // Benachrichtigung
@@ -201,7 +289,9 @@ app.get('/health_data/access', async (req, res) => {
 // Benachrichtigung
 async function sendAccessNotification(userId) {
   await connectToDB();
-  const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+  const user = await executeDatabaseOperation('findOne', 'users', () => 
+    db.collection('users').findOne({ _id: new ObjectId(userId) })
+  );
   if (user) {
     transporter.sendMail({
       from: 'example@gmail.com',
